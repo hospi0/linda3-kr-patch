@@ -8,7 +8,7 @@ HERE = os.path.dirname(os.path.abspath(__file__)); ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 import disc
 
-VER = 'v0.9'
+VER = 'alpha'
 XDELTA = r'C:\claude\utils\xdelta.exe'
 OUT = os.path.join(ROOT, 'work', 'out')
 NAME = 'LindaCube_KR_' + VER
