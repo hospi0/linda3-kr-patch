@@ -1,0 +1,15 @@
+# 허용 목록: 소스·문서만(ROM·스테이트·빌드 결과·my files·dist 금지)
+*
+!.gitignore
+!README.md
+!tools/
+!tools/*.py
+!docs/
+!docs/*.md
+!work/
+!work/trcheck/
+!work/trcheck/*.py
+!work/trcheck/manual.tsv
+!work/trcheck/manual_sub.tsv
+!work/trcheck/battle_trim_diff.tsv
+!work/trcheck/other_trim_diff.tsv
