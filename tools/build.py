@@ -312,6 +312,7 @@ def draw_label_glyphs(x):
         poc.put_glyph(x, c2s[c], rows)
 
 
+PLACE_EXTRA = {0x19C28}           # ハコブネ(E0014) — 지도 화면 목적지 목록 첫 항목, 지명처럼 반각으로 찍힘(2026-09-30 실기 깨짐)
 PLACE_LIST = (0x62F98, 0x63288)   # 지명 목록(E1093‥) — 세이브 목록에서 반각(06…04)으로 찍힘(2026-09-28 «하치아»). 원문 전각 가나라 전각으로도 찍힐 수 있어 양쪽 한글
 
 
@@ -572,7 +573,9 @@ def rebuild_prog(m, s, p, ln, tr_bytes, stat, force, compact=False):
 
 
 OVER = {}
-FIXED_LEN_PROGS = {0x13A, 0x19C, 0x201}
+# ★메뉴·시스템 묶음(D1·F6·11B = 시나리오 A/B/C)도 고정: RAM 0x222900 에 올라가 원본이 0x234D80(전투 묶음 데이터 자리)
+#   바로 앞에서 끝남(여유 0). 416 B 늘었더니 끝의 FACE2·POKEBELL 이 덮여 부재중 전화 창이 빈칸 + 받고 나면 지도 깨짐·이동 불가(2026-09-30 실기)
+FIXED_LEN_PROGS = {0x13A, 0x19C, 0x201, 0xD1, 0xF6, 0x11B}
 MAX_PACK_SECTORS = 127        # 원본 최대 묶음(254KB) — 묶음 RAM 버퍼(256KB 추정)를 넘지 않게
 # MIC 뒤 배치(트랙 1): MIC(9488) → SS_ASCII.CPK(43114, 350섹터, FILM 1.06 — 그대로 뒤로) → LOGO.CPK(43464, 679섹터) → SC_01(44143)
 # LOGO 영상을 줄여(tools/logoshrink.py → work/kr/LOGO_small.CPK) 생긴 섹터만큼 MIC 가 커질 수 있다.
@@ -679,7 +682,7 @@ def main():
     for r in exe:
         try:
             r['toks'] = small_space(check(r['id'], r['kind'], r['raw'], normalize(r['tr'])))
-            if r['kind'] == '반각' or PLACE_LIST[0] <= r['off'] < PLACE_LIST[1]:        # 화면에서 06…04 안에 찍힘 → 한글은 반각 칸
+            if r['kind'] == '반각' or PLACE_LIST[0] <= r['off'] < PLACE_LIST[1] or r['off'] in PLACE_EXTRA:        # 화면에서 06…04 안에 찍힘 → 한글은 반각 칸
                 r['toks'] = [(k, v, True) if k == 'ch' else (k, v, p) for k, v, p in r['toks']]
         except RuleError as e:
             errors.append(str(e))
@@ -698,7 +701,7 @@ def main():
             if k == 'ch' and len(v) == 2:
                 c = v[0] << 8 | v[1]; usage[c] = usage.get(c, 0) + 1
     dual = {v for r in exe if r['kind'] == '반각' for k, v, p in r['toks'] if k == 'ch' and is_hangul(v)}
-    want = {v for r in exe if PLACE_LIST[0] <= r['off'] < PLACE_LIST[1] for k, v, p in r['toks'] if k == 'ch' and is_hangul(v)}
+    want = {v for r in exe if PLACE_LIST[0] <= r['off'] < PLACE_LIST[1] or r['off'] in PLACE_EXTRA for k, v, p in r['toks'] if k == 'ch' and is_hangul(v)}
     # 글자 그대로 찍히는 2바이트 코드(번역문·안 옮긴 원문·실행 파일) — 운반 코드로 못 씀. 디버그 화면은 뺌
     lit = set()
     for raw, tt in toks.items():
@@ -750,8 +753,20 @@ def main():
     draw_small_labels(x)
     hmap = alloc_half(x, half, plan, hkeep)
     print('전각 한글 %d음절 / 칸 %d · 반각 %d음절' % (len(full), cap, len(half)))
-    # ③ MIC
-    tr_bytes = {raw: encode(tt, kmap, hmap) for raw, tt in toks.items()}
+    # ③ 실행 파일(동물 이름 목록 바이트가 정해져야 대사 {1B} 이름을 같은 바이트로 쓸 수 있음) → MIC
+    x_orig = bytes(x)
+    apply_exe(x, exe, kmap, hmap)
+    names = animal_names(x_orig, bytes(x), exe)
+    _, tab_o = animal_table(x_orig); _, tab_n = animal_table(bytes(x))
+    tr_bytes = {raw: encode(tag_animals(tt, names), kmap, hmap) for raw, tt in toks.items()}
+    bad = []
+    for raw, b in tr_bytes.items():
+        if 0x1B in raw:
+            a, z = animal_ids(raw, tab_o), animal_ids(b, tab_n)
+            if a != z:
+                bad.append('%s {1B} 동물 번호 원문 %s ≠ 번역 %s «%s»' % (tr[raw][0], a, z, tr[raw][2][:60]))
+    if bad:
+        print('\n'.join(bad[:60])); print('✗ {1B} 동물 이름이 목록과 안 맞는 줄 %d — 빌드 중단' % len(bad)); sys.exit(1)
     # 묶음이 RAM 버퍼(127섹터)를 넘을 때만 쓰는 좁은 판: 띄어쓰기 ＿(2B) → ' '(1B, 1칸) — 폭 한도를 그대로 지키는 줄만
     tr_narrow = {}
     for raw, tt in toks.items():
@@ -762,7 +777,7 @@ def main():
         lim = None if rid in DEBUG_IDS else limits(kind, tokens_raw(raw))
         ms = measure(t2)
         if lim and all(w <= lim[0] + 1e-6 for pg in ms for w in pg):
-            tr_narrow[raw] = encode(t2, kmap, hmap)
+            tr_narrow[raw] = encode(tag_animals(t2, names), kmap, hmap)
     stat = {'조각': 0, 'PROG': 0, '넘친 구역': 0, '민 PROG': 0, '늘린 묶음': 0, '다시 깐 MIC': '-'}
     if '--check' not in sys.argv:
         import joken
@@ -772,8 +787,7 @@ def main():
     if '--check' in sys.argv:
         print('되돌림 검사:', '✅ 원본과 같음' if bytes(m) == orig_m else '✗ 다름')
         return
-    # ④ 실행 파일·그림
-    apply_exe(x, exe, kmap, hmap)
+    # ④ 쓰기(실행 파일은 ③ 앞에서 이미 반영)
     os.makedirs(os.path.join(ROOT, 'work', 'kr'), exist_ok=True)
     open(os.path.join(ROOT, 'work', 'kr', '00SL.BIN'), 'wb').write(x)
     open(os.path.join(ROOT, 'work', 'kr', 'LINDA.MIC'), 'wb').write(m)
@@ -847,6 +861,72 @@ def load_exe_all(x=None):
             c = ln.rstrip('\n').split('\t')
             if c[0] != 'ID' and len(c) >= 5 and (len(c) < 6 or not c[5].strip()):
                 yield X.from_text(c[4])
+
+
+# ★{1B} 동물 이름(2026-09-30 실기 «다람쥐 → 돼지쥐»): 글 전처리 0x06014C12 가 {1B} 뒤(숫자 아님)를 0x06017134 로 넘김 →
+#   0x060170B8 이 목록 0x17(00SL 목록 시작 표 0x633CC 의 0x17번, NUL 로 센 항목 1‥120, 0 = 人間)에서 «글 앞머리와 바이트가 같은
+#   가장 긴 항목»(숫자로 시작하는 항목 제외)을 찾아 번호로 바꾸고 그 길이만큼 건너뜀. 못 찾으면 1번(ブタ)·4바이트.
+#   ⇒ 대사의 {1B} 뒤 이름은 목록 항목과 «같은 바이트»(반각 운반 코드 — 전각 칸에도 같은 한글이 그려짐)여야 한다.
+ANIMAL_LIST = 0x17
+
+
+def animal_table(x):
+    p = struct.unpack_from('>I', x, 0x633CC + ANIMAL_LIST * 4)[0] - 0x06004000
+    out = []; o = p
+    for _ in range(121):
+        e = x.index(X.NUL, o); out.append(bytes(x[o:e])); o = e + 1
+    return p, out
+
+
+def animal_id(text, table):
+    best = bid = 0
+    for i in range(1, 121):
+        e = table[i]
+        if e and e[0] > 0x39 and text.startswith(e) and len(e) > best:
+            best, bid = len(e), i
+    return bid
+
+
+def animal_ids(raw, table):
+    """글 바이트의 {1B}(뒤가 숫자 아닌 것)마다 게임이 고르는 동물 번호"""
+    out = []; i = 0
+    for k, v, p in tokens_raw(raw):
+        n = 1 + len(p) if k == 'ctl' else len(v)
+        if k == 'ctl' and v == 0x1B and i + 1 < len(raw) and raw[i + 1] > 0x39:
+            out.append(animal_id(raw[i + 1:], table))
+        i += n
+    return out
+
+
+def animal_names(x_orig, x_new, rows):
+    """번역 이름(한글 글) → 새 목록 항목 바이트"""
+    p, _ = animal_table(x_orig)
+    idx = {}; o = p
+    for i in range(121):
+        idx[o] = i; o = x_orig.index(X.NUL, o) + 1
+    _, new = animal_table(x_new)
+    names = {}
+    for r in rows:
+        if r['off'] in idx and idx[r['off']] and all(k == 'ch' and is_hangul(v) for k, v, _ in r['toks']):
+            names[''.join(v for _, v, _ in r['toks'])] = new[idx[r['off']]]
+    return names
+
+
+def tag_animals(tt, names):
+    """{1B} 뒤 한글 중 가장 긴 동물 이름을 목록 항목 바이트로 바꿈"""
+    out = list(tt); i = 0
+    while i < len(out):
+        if out[i][0] == 'ctl' and out[i][1] == 0x1B:
+            s = ''
+            for k, v, p in out[i + 1:]:
+                if k != 'ch' or not isinstance(v, str):
+                    break
+                s += v
+            best = max((n for n in names if s.startswith(n)), key=len, default=None)
+            if best:
+                out[i + 1:i + 1 + len(best)] = [('ch', names[best], False)]
+        i += 1
+    return out
 
 
 def apply_exe(x, rows, kmap, hmap):
