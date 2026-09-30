@@ -771,7 +771,7 @@ def main():
     tr_narrow = {}
     for raw, tt in toks.items():
         t2 = [('ch', ' ', False) if (k == 'ch' and v == '＿' and not p) else (k, v, p) for k, v, p in tt]
-        if t2 == tt:
+        if t2 == tt or raw.startswith(b'\x0c\x15K'):   # 부재중 전화 창(«{0C}{15}K…»)은 좁히지 않는다 — 반각 공백 넣으니 마지막 글자만 찍힘(2026-09-30 실기, 시험 중)
             continue
         rid, kind, _ = tr[raw]
         lim = None if rid in DEBUG_IDS else limits(kind, tokens_raw(raw))
